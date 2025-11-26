@@ -122,7 +122,7 @@ st.markdown('<h1 class="main-header">💳 Sistema de Análise de Crédito</h1>',
 st.markdown("### 🤖 Análise Inteligente com Machine Learning")
 
 # Informações sobre o deploy
-st.info("✨ **Deploy realizado por: Seu Nome** | 🚀 Powered by Streamlit Cloud")
+st.info("✨ **Deploy realizado por: João Henrique Dib!** | 🚀 Powered by Streamlit Cloud")
 
 # Carregamento do modelo
 modelo = carregar_modelo()
