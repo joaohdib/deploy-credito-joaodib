@@ -5,6 +5,8 @@ import pickle
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
+import os
 
 # Configuração da página
 st.set_page_config(
@@ -53,6 +55,37 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# --------------------------------------------------------------------
+# Histórico de análises (session_state)
+# --------------------------------------------------------------------
+if 'historico' not in st.session_state:
+    st.session_state.historico = []
+
+# --------------------------------------------------------------------
+# Log de predições para monitoramento de drift
+# --------------------------------------------------------------------
+LOG_FILE = 'logs_predicoes.csv'
+
+def carregar_log_predicoes():
+    if os.path.exists(LOG_FILE):
+        try:
+            df_log = pd.read_csv(LOG_FILE, parse_dates=['timestamp'])
+        except Exception:
+            df_log = pd.DataFrame(columns=[
+                'timestamp', 'idade', 'renda',
+                'score_credito', 'experiencia_credito',
+                'probabilidade', 'predicao'
+            ])
+    else:
+        df_log = pd.DataFrame(columns=[
+            'timestamp', 'idade', 'renda',
+            'score_credito', 'experiencia_credito',
+            'probabilidade', 'predicao'
+        ])
+    return df_log
+
+df_log = carregar_log_predicoes()
 
 # Função para carregar o modelo
 @st.cache_resource
@@ -128,7 +161,7 @@ st.info("✨ **Deploy realizado por: João Henrique Dib!** | 🚀 Powered by Str
 modelo = carregar_modelo()
 
 if modelo is not None:
-    # Sidebar com informações do modelo
+    # Sidebar com informações do modelo + histórico + drift
     with st.sidebar:
         st.header("📊 Informações do Modelo")
         st.write("**Tipo:** Classificação Binária")
@@ -143,6 +176,27 @@ if modelo is not None:
         
         st.header("ℹ️ Sobre")
         st.write("Sistema desenvolvido para demonstração de deploy de modelos ML usando Streamlit Cloud.")
+
+        # ---------------- Histórico de Análises ----------------
+        st.header("📊 Histórico de Análises")
+        if st.session_state.historico:
+            df_hist = pd.DataFrame(st.session_state.historico)
+            st.dataframe(df_hist, use_container_width=True)
+        else:
+            st.caption("Nenhuma análise realizada ainda.")
+
+        # ---------------- Monitoramento Básico de Drift ----------------
+        st.header("📈 Monitoramento Básico")
+        if not df_log.empty and 'idade' in df_log.columns:
+            limite_30d = datetime.now() - timedelta(days=30)
+            ultimos_30d = df_log[df_log['timestamp'] >= limite_30d]
+            if not ultimos_30d.empty:
+                media_idade_30d = ultimos_30d['idade'].mean()
+            else:
+                media_idade_30d = df_log['idade'].mean()
+            st.metric("Média Idade (30d)", f"{media_idade_30d:.1f} anos")
+        else:
+            st.caption("Sem dados suficientes para monitorar drift ainda.")
 
     # Formulário de entrada
     st.header("👤 Dados do Cliente")
@@ -200,6 +254,26 @@ if modelo is not None:
         probabilidade, decisao = fazer_predicao(modelo, dados_cliente)
         
         if probabilidade is not None:
+            # ---------------- Atualizar histórico em memória ----------------
+            st.session_state.historico.append({
+                'hora': datetime.now().strftime('%H:%M:%S'),
+                'resultado': 'Aprovado' if decisao == 1 else 'Negado',
+                'probabilidade': f"{probabilidade:.1%}"
+            })
+
+            # ---------------- Salvar no log de predições (drift) ----------------
+            nova_linha = {
+                'timestamp': datetime.now(),
+                'idade': idade,
+                'renda': renda,
+                'score_credito': score_credito,
+                'experiencia_credito': experiencia_credito,
+                'probabilidade': probabilidade,
+                'predicao': int(decisao)
+            }
+            df_log = pd.concat([df_log, pd.DataFrame([nova_linha])], ignore_index=True)
+            df_log.to_csv(LOG_FILE, index=False)
+
             # Categorizar risco
             categoria_risco, tipo_alerta = categorizar_risco(probabilidade)
             
@@ -337,6 +411,45 @@ if modelo is not None:
             st.markdown("---")
             if st.button("🔄 Nova Análise", type="secondary", use_container_width=True):
                 st.experimental_rerun()
+
+    # ----------------------------------------------------------------
+    # Análise em lote via upload de CSV
+    # ----------------------------------------------------------------
+    st.markdown("---")
+    st.header("📂 Análise em Lote (CSV)")
+
+    uploaded_file = st.file_uploader("Analise múltiplos clientes (arquivo CSV)", type=['csv'])
+
+    if uploaded_file is not None:
+        try:
+            df_lote = pd.read_csv(uploaded_file)
+
+            # Tenta usar colunas nomeadas, senão usa tudo como está
+            colunas_esperadas = ['idade', 'renda', 'score_credito', 'experiencia_credito']
+            if all(col in df_lote.columns for col in colunas_esperadas):
+                X_lote = df_lote[colunas_esperadas]
+            else:
+                X_lote = df_lote  # assume que já está no formato correto
+
+            preds_proba_lote = modelo.predict_proba(X_lote)[:, 1]
+            preds_lote = modelo.predict(X_lote)
+
+            df_lote['Probabilidade'] = preds_proba_lote
+            df_lote['Resultado'] = np.where(preds_lote == 1, 'Aprovado', 'Negado')
+
+            st.dataframe(df_lote, use_container_width=True)
+
+            # Botão de download dos resultados
+            csv_result = df_lote.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "⬇️ Download Resultados",
+                data=csv_result,
+                file_name="resultados_analise_credito.csv",
+                mime="text/csv"
+            )
+
+        except Exception as e:
+            st.error(f"❌ Erro ao processar arquivo CSV: {e}")
 
     # Seção de informações adicionais
     st.markdown("---")
